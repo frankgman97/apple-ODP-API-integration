@@ -1,0 +1,30 @@
+{
+  "name": "uspto-odp-test",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cli": "tsx cli/main.ts",
+    "cli:search": "tsx cli/main.ts search",
+    "cli:details": "tsx cli/main.ts details",
+    "cli:export": "tsx cli/main.ts export",
+    "cli:status": "tsx cli/main.ts status"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "cli-progress": "^3.12.0",
+    "commander": "^13.0.0",
+    "dotenv": "^16.4.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/cli-progress": "^3.11.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7",
+    "vite": "^6.2",
+    "vitest": "^4.0.18"
+  }
+}
