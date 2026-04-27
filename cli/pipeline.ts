@@ -161,7 +161,11 @@ export async function runSearchPipeline(opts: SearchOpts): Promise<void> {
 
     const controller = new AbortController();
     process.on('SIGINT', () => {
-      console.log('\n\nGracefully stopping... (records already saved are safe)');
+      if (progress) {
+        progress.log('\nGracefully stopping... (records already saved are safe)');
+      } else {
+        console.log('\n\nGracefully stopping... (records already saved are safe)');
+      }
       controller.abort();
     });
 
@@ -179,6 +183,13 @@ export async function runSearchPipeline(opts: SearchOpts): Promise<void> {
             progress.updateOverall(globalFetched);
           } else {
             logger?.log(globalFetched, totalExpected, label);
+          }
+        },
+        onError: (wid, chunkId, msg) => {
+          if (progress) {
+            progress.log(`  Worker ${wid}: Error on chunk ${chunkId}: ${msg}`);
+          } else {
+            console.error(`  Worker ${wid}: Error on chunk ${chunkId}: ${msg}`);
           }
         },
         signal: controller.signal,
@@ -252,7 +263,11 @@ export async function runDetailPipeline(opts: DetailOpts): Promise<void> {
 
     const controller = new AbortController();
     process.on('SIGINT', () => {
-      console.log('\n\nGracefully stopping...');
+      if (progress) {
+        progress.log('\nGracefully stopping...');
+      } else {
+        console.log('\n\nGracefully stopping...');
+      }
       controller.abort();
     });
 

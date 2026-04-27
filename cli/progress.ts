@@ -7,6 +7,7 @@ export interface ProgressTracker {
   startTime: number;
   update(workerId: number, current: number, total: number, label: string): void;
   updateOverall(current: number): void;
+  log(message: string): void;
   stop(): void;
 }
 
@@ -71,6 +72,10 @@ export function createProgressTracker(
       overall.update(current, {
         label: `Overall ${current.toLocaleString()}/${totalExpected.toLocaleString()} | ${formatEta(startTime, current, totalExpected)}`,
       });
+    },
+
+    log(message: string) {
+      multi.log(message + '\n');
     },
 
     stop() {

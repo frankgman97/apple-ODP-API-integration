@@ -62,19 +62,18 @@ The pipeline also reads `VITE_USPTO_API_KEY` (for compatibility with the browser
 # 1. Preview the work plan (no data fetched)
 npm run cli:search -- -q 'applicationMetaData.firstApplicantName:Apple*' --dry-run
 
-# 2. Fetch search metadata for all matching records
+# 2. Fetch all matching records (search returns complete data — no detail step needed)
 npm run cli:search -- -q 'applicationMetaData.firstApplicantName:Apple*'
 
 # 3. Check progress
 npm run cli:status
 
-# 4. Fetch full detail records (one API call per application)
-npm run cli:details
-
-# 5. Export to JSON and CSV
+# 4. Export to JSON and CSV
 npm run cli:export
 ```
 
+> **Note:** The `search` endpoint returns the **full record** for every patent (events, assignments, attorneys, continuity, PTA, correspondence — everything). The `details` command exists but is redundant — it fetches the exact same data one record at a time instead of in batches of 25. Verified 2026-03-14 across 11 records spanning 2008–2025: search and detail JSON was byte-for-byte identical.
+hcc
 ---
 
 ## Commands
@@ -141,9 +140,11 @@ Search complete.
 
 ---
 
-### `details`
+### `details` (Redundant — not needed)
 
-Fetches the full detail record for each application found during the search phase. The search endpoint returns ~15 summary fields; the detail endpoint returns the complete record (attorneys, prosecution history, continuity data, assignments, etc.).
+> **This command is redundant.** The search endpoint already returns the complete record (events, assignments, attorneys, continuity, PTA, correspondence — everything). The detail endpoint returns the exact same data but one record at a time instead of in batches of 25, making it ~25x slower. Verified 2026-03-14 across 11 records spanning 2008–2025: search and detail JSON was byte-for-byte identical.
+>
+> The command still works if needed, but there is no reason to run it.
 
 ```
 npm run cli:details [options]
@@ -152,18 +153,10 @@ npm run cli:details [options]
 | Option | Default | Description |
 |---|---|---|
 | `--db <path>` | `./data/patents.db` | Path to the SQLite database. Must contain data from a prior `search` run. |
-| `--concurrency <n>` | `5` | Number of parallel workers. The detail endpoint is one call per record, so more workers help significantly. |
-| `--limit <n>` | All pending | Fetch at most `n` records. Useful for testing (e.g., `--limit 50`). |
+| `--concurrency <n>` | `5` | Number of parallel workers. |
+| `--limit <n>` | All pending | Fetch at most `n` records. |
 | `--retry-errors` | `false` | Retry records that errored on a previous run. |
 | `--api-key <key>` | From `.env` | Override the API key. |
-
-**What it does:**
-
-1. Reads the `detail_queue` table to find all pending application numbers.
-2. Launches `n` concurrent workers. Each worker atomically claims the next pending application, fetches the full record from the detail endpoint, and writes it to the database.
-3. Errored records are retried up to 3 times automatically.
-
-**Note:** This step is significantly slower than search because the detail API returns one record per request (vs. 25 per page during search). For 12,000 records at ~4 req/s, expect ~50 minutes.
 
 ---
 
@@ -225,11 +218,11 @@ Default values are defined in `cli/config.ts`. All can be overridden via CLI fla
 | Parameter | Default | Description |
 |---|---|---|
 | `pageSize` | `25` | Records per API page. Reduced from 100 to avoid HTTP 413 (payload too large) errors — patent records with full attorney/event data are very large. |
-| `rateLimitDelay` | `250` ms | Delay between consecutive API requests within a worker. |
+| `rateLimitDelay` | `250` ms | Delay between consecutive API requests within a worker. For large datasets with high concurrency (7+ workers), use `750` ms to avoid constant 429s. |
 | `rateLimitBackoff` | `5000` ms | Initial backoff when the API returns HTTP 429 (rate limited). Doubles on each retry (exponential backoff). |
 | `maxRetries` | `3` | Maximum retry attempts for failed API requests. |
-| `concurrency` | `3` (search) / `5` (details) | Number of parallel workers. |
-| `chunkMonths` | `6` | Date-range chunk size in months. |
+| `concurrency` | `3` | Number of parallel workers. For large datasets, `7` works well with `rateLimitDelay=750`. |
+| `chunkMonths` | `6` | Date-range chunk size in months. Use `12` if per-year counts are under 10K; use `3` for very dense datasets. |
 
 ---
 
@@ -266,6 +259,8 @@ The USPTO ODP API uses [Apache Lucene query syntax](https://lucene.apache.org/co
 ### Tips
 
 - Always wrap the full `-q` value in **single quotes** to prevent shell interpretation of `*`, `(`, `)`, and `&`.
+- **Wrap OR queries in parentheses** — Without `(...)`, date-range filters may only apply to one side of the OR due to Lucene operator precedence (`AND` binds tighter than `OR`). This causes the pipeline to miss roughly half the records. Always write `(A OR B)`, not `A OR B`.
+- **Long commands must use `\` line continuation** — If a command spans multiple lines in your terminal, zsh will treat each line as a separate command. Use `\` at the end of each line (with no trailing spaces) to continue on the next line. See the [Examples](#examples) section for the pattern.
 - Use the [USPTO Patent File Wrapper search UI](https://patentcenter.uspto.gov/applications/search) to test queries interactively before running them through the pipeline.
 - Wildcard prefix searches (`*POLSINELLI*`) work but are slower than suffix-only wildcards (`Apple*`).
 
@@ -279,8 +274,8 @@ The USPTO ODP API uses [Apache Lucene query syntax](https://lucene.apache.org/co
 ┌──────────────┐     ┌───────────────────┐     ┌──────────────┐
 │              │     │   USPTO ODP API    │     │              │
 │   CLI Entry  │────▶│   /search (POST)   │────▶│   SQLite DB  │
-│   (main.ts)  │     │   /detail (GET)    │     │   (WAL mode) │
-│              │     │                    │     │              │
+│   (main.ts)  │     │  (returns full     │     │   (WAL mode) │
+│              │     │   records in bulk)  │     │              │
 └──────────────┘     └───────────────────┘     └──────────────┘
        │                      ▲                       │
        │                      │                       │
@@ -288,11 +283,11 @@ The USPTO ODP API uses [Apache Lucene query syntax](https://lucene.apache.org/co
 ┌──────────────┐     ┌───────────────────┐     ┌──────────────┐
 │   Pipeline   │     │  Search Workers   │     │   Streaming  │
 │  Orchestrator│────▶│  (N concurrent)   │     │   Export     │
-│ (pipeline.ts)│     │ Detail Workers    │     │  (JSON/CSV)  │
+│ (pipeline.ts)│     │                   │     │  (JSON/CSV)  │
 └──────────────┘     └───────────────────┘     └──────────────┘
 ```
 
-The pipeline runs entirely on your local machine. No browser, no server, no cloud. It reads your API key from `.env`, fetches data directly from the USPTO API, and stores everything in a local SQLite file.
+The pipeline runs entirely on your local machine. No browser, no server, no cloud. It reads your API key from `.env`, fetches data directly from the USPTO API, and stores everything in a local SQLite file. Only the search endpoint is used — it returns complete records (all fields) in batches of 25.
 
 ### Date-Range Chunking
 
@@ -495,7 +490,6 @@ brew install --cask db-browser-for-sqlite
 
 ```bash
 npm run cli:search -- -q 'applicationMetaData.firstApplicantName:Apple*'
-npm run cli:details
 npm run cli:export
 ```
 
@@ -505,8 +499,23 @@ npm run cli:export
 npm run cli:search -- \
   -q '(correspondenceAddressBag.nameLineOneText:*POLSINELLI* OR correspondenceAddressBag.nameLineTwoText:*POLSINELLI*) AND (applicationMetaData.groupArtUnitNumber:16* OR applicationMetaData.groupArtUnitNumber:17*)' \
   --db ./data/polsinelli.db
-npm run cli:details -- --db ./data/polsinelli.db
 npm run cli:export -- --db ./data/polsinelli.db
+```
+
+### Fetch a large law firm portfolio (100K+ records)
+
+```bash
+# Always dry-run first to verify chunk sizes
+caffeinate -i npx tsx cli/main.ts search \
+  -q 'correspondenceAddressBag.nameLineOneText:"Foley & Lardner*" OR correspondenceAddressBag.nameLineTwoText:"Foley & Lardner*"' \
+  --concurrency 7 --rate-limit-delay 750 --chunk-months 12 \
+  --db ./data/foley-lardner.db --dry-run
+
+# If all chunks are under 10K, run for real (remove --dry-run)
+caffeinate -i npx tsx cli/main.ts search \
+  -q 'correspondenceAddressBag.nameLineOneText:"Foley & Lardner*" OR correspondenceAddressBag.nameLineTwoText:"Foley & Lardner*"' \
+  --concurrency 7 --rate-limit-delay 750 --chunk-months 12 \
+  --db ./data/foley-lardner.db
 ```
 
 ### Test with a small subset
@@ -516,9 +525,6 @@ npm run cli:export -- --db ./data/polsinelli.db
 npm run cli:search -- \
   -q 'applicationMetaData.firstApplicantName:Apple*' \
   --date-from 2023-01-01 --date-to 2023-12-31
-
-# Only fetch 50 detail records
-npm run cli:details -- --limit 50
 ```
 
 ### Dry run to estimate workload
@@ -591,6 +597,26 @@ npm run cli:search -- -q 'firstApplicantName:Google*' --db ./data/google.db
 ```
 
 Or delete the old database first: `rm -rf data/`
+
+### OR query returns half the expected records
+
+If your dry-run total is roughly half the probe total, your OR query is probably missing parentheses. The pipeline's date-range `rangeFilters` combine with the `q` field via AND — but Lucene's AND binds tighter than OR, so without parentheses:
+
+```
+nameLineOneText:*FOO* OR nameLineTwoText:*FOO*   ← WRONG (date filter only applies to second term)
+(nameLineOneText:*FOO* OR nameLineTwoText:*FOO*)  ← CORRECT (date filter applies to both)
+```
+
+### `zsh: command not found: --flag`
+
+Your command got split across lines. zsh treated the second line as a separate command. Use backslash `\` continuation (no trailing spaces after `\`):
+
+```bash
+npm run cli:search -- \
+  -q '(your query here)' \
+  --dry-run --concurrency 5 \
+  --chunk-months 12 --db ./data/my.db
+```
 
 ### Record count mismatch
 

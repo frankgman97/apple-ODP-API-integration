@@ -18,6 +18,7 @@ export interface SearchWorkerOpts {
   pageSize: number;
   rateLimitDelay: number;
   onProgress?: (workerId: number, fetched: number, total: number, label: string) => void;
+  onError?: (workerId: number, chunkId: string, message: string) => void;
   signal?: AbortSignal;
 }
 
@@ -26,7 +27,7 @@ export interface SearchWorkerOpts {
  * Returns total number of records fetched.
  */
 export async function runSearchWorker(opts: SearchWorkerOpts): Promise<number> {
-  const { workerId, db, apiKey, pageSize, rateLimitDelay, onProgress, signal } = opts;
+  const { workerId, db, apiKey, pageSize, rateLimitDelay, onProgress, onError, signal } = opts;
   let totalFetched = 0;
 
   while (true) {
@@ -66,7 +67,11 @@ export async function runSearchWorker(opts: SearchWorkerOpts): Promise<number> {
     } catch (err) {
       const msg = (err as Error).message;
       markChunkError(db, chunk.chunk_id, msg);
-      console.error(`  Worker ${workerId}: Error on chunk ${chunk.chunk_id}: ${msg}`);
+      if (onError) {
+        onError(workerId, chunk.chunk_id, msg);
+      } else {
+        console.error(`  Worker ${workerId}: Error on chunk ${chunk.chunk_id}: ${msg}`);
+      }
     }
   }
 

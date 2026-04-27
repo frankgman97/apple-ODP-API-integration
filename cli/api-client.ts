@@ -33,6 +33,10 @@ async function fetchWithRetry(
         await delay(wait);
         continue;
       }
+      if (res.status === 404) {
+        // USPTO returns 404 when no records match — not a real error
+        return res;
+      }
       if (!res.ok) {
         const body = await res.text().catch(() => '');
         throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
@@ -70,6 +74,9 @@ export async function searchODP(
     maxRetries,
     backoff,
   );
+  if (res.status === 404) {
+    return { count: 0, patentFileWrapperDataBag: [] };
+  }
   return (await res.json()) as SearchResponse;
 }
 

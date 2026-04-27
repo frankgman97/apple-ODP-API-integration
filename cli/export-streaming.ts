@@ -1,8 +1,15 @@
-import { createWriteStream } from 'fs';
+import { createWriteStream, type WriteStream } from 'fs';
 import { mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { openDatabase, iteratePatents, countPatents, type PatentRow } from './db.js';
 import { createSimpleLogger } from './progress.js';
+
+/** Write to stream, pausing on backpressure until the buffer drains. */
+function write(stream: WriteStream, data: string): Promise<void> | undefined {
+  if (!stream.write(data)) {
+    return new Promise((resolve) => stream.once('drain', resolve));
+  }
+}
 
 // ─── JSON Export (streaming) ────────────────────────────
 
@@ -17,25 +24,25 @@ export async function exportJSON(dbPath: string, outputPath: string, source?: st
 
   mkdirSync(dirname(outputPath), { recursive: true });
   const stream = createWriteStream(outputPath);
+  const done = new Promise<void>((resolve, reject) => {
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+  });
   const logger = createSimpleLogger('JSON Export');
 
   stream.write('[\n');
   let count = 0;
 
   for (const row of iteratePatents(db, source)) {
-    if (count > 0) stream.write(',\n');
-    stream.write(row.raw_json);
+    if (count > 0) await write(stream, ',\n');
+    await write(stream, row.raw_json);
     count++;
     logger.log(count, total);
   }
 
-  stream.write('\n]\n');
+  await write(stream, '\n]\n');
   stream.end();
-
-  await new Promise<void>((resolve, reject) => {
-    stream.on('finish', resolve);
-    stream.on('error', reject);
-  });
+  await done;
 
   logger.done(count);
   console.log(`  Saved: ${outputPath}`);
@@ -140,6 +147,10 @@ export async function exportCSV(dbPath: string, outputPath: string, source?: str
 
   mkdirSync(dirname(outputPath), { recursive: true });
   const stream = createWriteStream(outputPath);
+  const done = new Promise<void>((resolve, reject) => {
+    stream.on('finish', resolve);
+    stream.on('error', reject);
+  });
   const logger = createSimpleLogger('CSV Export');
 
   // Header row
@@ -174,17 +185,13 @@ export async function exportCSV(dbPath: string, outputPath: string, source?: str
       extractPipeSeparated(raw, 'correspondence'),
     ];
 
-    stream.write(values.map(escapeCSV).join(',') + '\n');
+    await write(stream, values.map(escapeCSV).join(',') + '\n');
     count++;
     logger.log(count, total);
   }
 
   stream.end();
-
-  await new Promise<void>((resolve, reject) => {
-    stream.on('finish', resolve);
-    stream.on('error', reject);
-  });
+  await done;
 
   logger.done(count);
   console.log(`  Saved: ${outputPath}`);
